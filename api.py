@@ -17,7 +17,6 @@ from groq import Groq
 from PIL import Image
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 from supabase import create_client
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
@@ -80,7 +79,21 @@ OCR_ZOOM = 2.5
 DOCUMENT_ROOT.mkdir(exist_ok=True)
 STORAGE_ROOT.mkdir(exist_ok=True)
 
-model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+_embedding_model = None
+
+
+def get_embedding_model():
+    """Load the embedding model only when a request needs it."""
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+
+        _embedding_model = SentenceTransformer(
+            EMBEDDING_MODEL_NAME,
+            device="cpu",
+        )
+    return _embedding_model
+
 
 supabase_client = None
 if SUPABASE_STORAGE_ENABLED:
@@ -497,7 +510,7 @@ def embed_new_chunks(
     if not new_chunks:
         return 0
 
-    embeddings = model.encode(
+    embeddings = get_embedding_model().encode(
         new_chunks,
         batch_size=64,
         normalize_embeddings=True,
@@ -1868,7 +1881,7 @@ def chat(request: ChatRequest):
         retrieved = []
 
         if not is_casual_message(message):
-            query_embedding = model.encode(
+            query_embedding = get_embedding_model().encode(
                 message,
                 normalize_embeddings=True,
             )
