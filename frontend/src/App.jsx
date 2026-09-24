@@ -12,7 +12,6 @@ import {
   Copy,
   Database,
   Edit3,
-  ExternalLink,
   Eye,
   File,
   FileSearch,
@@ -38,12 +37,12 @@ import {
   Zap,
 } from 'lucide-react'
 
-const API_BASE = 'http://127.0.0.1:8000'
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '')
 
 const DEFAULT_SOURCES = [
   {
     id: 1,
-    name: 'Edwards Documents',
+    name: 'Northstar Documents',
     type: 'Document Store',
     records: 0,
     icon: FolderOpen,

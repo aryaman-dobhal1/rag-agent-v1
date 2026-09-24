@@ -45,6 +45,11 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        *[
+            origin.strip().rstrip("/")
+            for origin in os.getenv("FRONTEND_ORIGINS", "").split(",")
+            if origin.strip()
+        ],
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -56,8 +61,8 @@ app.add_middleware(
 # CONFIG
 # ============================================================
 
-DOCUMENT_ROOT = Path("documents")
-STORAGE_ROOT = Path("document_storage")
+DOCUMENT_ROOT = Path(os.getenv("DOCUMENT_ROOT", "documents"))
+STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "document_storage"))
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
@@ -78,12 +83,12 @@ model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 # ============================================================
 
 CANONICAL_FACTS = """
-CEO: Bernard J. Zovighian (Chief Executive Officer since May 2023)
-CFO: Theodora "Doretta" Mistras (Chief Financial Officer since end of May 2026)
-Company: Edwards Lifesciences Corporation (NYSE: EW)
-Headquarters: Irvine, California, USA
-Founded: 1958, by Miles "Lowell" Edwards
-Industry: Structural heart disease / cardiovascular medical devices
+CEO: Avery Morgan (Chief Executive Officer)
+CFO: Riley Chen (Chief Financial Officer)
+Company: Northstar Medical Systems Corporation (NMS)
+Headquarters: Boston, Massachusetts, USA
+Founded: 2010
+Industry: Medical technology and healthcare innovation
 """.strip()
 
 

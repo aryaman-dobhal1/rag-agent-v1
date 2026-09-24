@@ -1,3 +1,5 @@
+import os
+
 from datetime import datetime
 
 from sqlalchemy import (
@@ -15,7 +17,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
 
 
-DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/chatbot"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/chatbot")
 EMBEDDING_DIMENSION = 384
 
 engine = create_engine(
@@ -173,14 +175,27 @@ with engine.begin() as connection:
         text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources TEXT")
     )
 
+# Rename the original demo document metadata for existing local databases.
+with engine.begin() as connection:
+    connection.execute(
+        text(
+            "UPDATE documents "
+            "SET filename = 'v1_Northstar_Medical_Systems_Knowledge_Base.pdf', "
+            "file_path = REPLACE(file_path, "
+            "'v1_Edwards_Lifesciences_Knowledge_Base.pdf', "
+            "'v1_Northstar_Medical_Systems_Knowledge_Base.pdf') "
+            "WHERE filename = 'v1_Edwards_Lifesciences_Knowledge_Base.pdf'"
+        )
+    )
+
 
 def seed_default_sources():
     db = SessionLocal()
 
     defaults = [
         (
-            "Edwards Documents",
-            "edwards-documents",
+            "Northstar Documents",
+            "northstar-documents",
             "Company documents, product material, annual reports and internal knowledge.",
         ),
         (
@@ -196,6 +211,14 @@ def seed_default_sources():
     ]
 
     try:
+        # Rename the original demo source for databases created before the
+        # Northstar branding update.
+        legacy_source = db.query(Source).filter(Source.slug == "edwards-documents").first()
+        northstar_source = db.query(Source).filter(Source.slug == "northstar-documents").first()
+        if legacy_source is not None and northstar_source is None:
+            legacy_source.name = "Northstar Documents"
+            legacy_source.slug = "northstar-documents"
+
         for name, slug, description in defaults:
             existing = db.query(Source).filter(Source.slug == slug).first()
 
