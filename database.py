@@ -161,13 +161,14 @@ class DocumentChunk(Base):
 with engine.begin() as connection:
     connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
+# Create all tables before applying compatibility migrations.
+Base.metadata.create_all(bind=engine)
+
 # Migrate existing databases so Source can persist connect/disconnect state.
 with engine.begin() as connection:
     connection.execute(
         text("ALTER TABLE sources ADD COLUMN IF NOT EXISTS connected BOOLEAN NOT NULL DEFAULT FALSE")
     )
-
-Base.metadata.create_all(bind=engine)
 
 # Keep existing databases compatible with the old chatbot.
 with engine.begin() as connection:
