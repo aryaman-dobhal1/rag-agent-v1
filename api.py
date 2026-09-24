@@ -18,6 +18,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
+from supabase import create_client
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
@@ -66,6 +67,10 @@ STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "document_storage"))
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "documents")
+SUPABASE_STORAGE_ENABLED = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
 SIMILARITY_THRESHOLD = 0.35
@@ -76,6 +81,13 @@ DOCUMENT_ROOT.mkdir(exist_ok=True)
 STORAGE_ROOT.mkdir(exist_ok=True)
 
 model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+supabase_client = None
+if SUPABASE_STORAGE_ENABLED:
+    supabase_client = create_client(
+        supabase_url=SUPABASE_URL,
+        supabase_key=SUPABASE_SERVICE_ROLE_KEY,
+    )
 
 
 # ============================================================
@@ -219,6 +231,7 @@ def ocr_image(image):
 
 
 def extract_pdf_unit(file_path: str, unit_index: int):
+    file_path = resolve_document_path(file_path)
     reader = PdfReader(file_path)
 
     if unit_index >= len(reader.pages):
@@ -249,6 +262,7 @@ def extract_pdf_unit(file_path: str, unit_index: int):
 
 
 def get_docx_units(file_path: str):
+    file_path = resolve_document_path(file_path)
     document = DocxDocument(file_path)
     units = []
 
@@ -292,6 +306,7 @@ def get_docx_units(file_path: str):
 
 
 def get_total_units(file_path: str) -> int:
+    file_path = resolve_document_path(file_path)
     suffix = Path(file_path).suffix.lower()
 
     if suffix == ".pdf":
@@ -304,6 +319,7 @@ def get_total_units(file_path: str) -> int:
 
 
 def extract_unit(file_path: str, unit_index: int):
+    file_path = resolve_document_path(file_path)
     suffix = Path(file_path).suffix.lower()
 
     if suffix == ".pdf":
@@ -324,6 +340,54 @@ def extract_unit(file_path: str, unit_index: int):
 # ============================================================
 # FILE STORAGE
 # ============================================================
+
+def storage_key(document_id: int, filename: str) -> str:
+    return f"documents/{document_id}/{filename}"
+
+
+def local_path_for_storage_key(key: str) -> Path:
+    return STORAGE_ROOT / key
+
+
+def resolve_document_path(file_path: str) -> Path:
+    """Return a local file for extraction, downloading Supabase objects when needed."""
+    if not file_path.startswith("supabase://"):
+        return Path(file_path)
+
+    key = file_path.removeprefix("supabase://")
+    destination = local_path_for_storage_key(key)
+    if destination.exists():
+        return destination
+
+    if supabase_client is None:
+        raise RuntimeError("Supabase Storage is not configured.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    data = supabase_client.storage.from_(SUPABASE_STORAGE_BUCKET).download(key)
+    destination.write_bytes(data)
+    return destination
+
+
+def upload_to_supabase(local_file: Path, key: str) -> str:
+    if supabase_client is None:
+        return str(local_file)
+
+    with local_file.open("rb") as source:
+        supabase_client.storage.from_(SUPABASE_STORAGE_BUCKET).upload(
+            key,
+            source.read(),
+            {"content-type": "application/octet-stream", "upsert": "true"},
+        )
+    return f"supabase://{key}"
+
+
+def delete_from_supabase(file_path: str) -> None:
+    if supabase_client is None or not file_path.startswith("supabase://"):
+        return
+
+    key = file_path.removeprefix("supabase://")
+    supabase_client.storage.from_(SUPABASE_STORAGE_BUCKET).remove([key])
+
 
 async def save_upload(file: UploadFile, destination: Path):
     total = 0
@@ -1044,6 +1108,10 @@ async def upload_document(
             file,
             version_path,
         )
+        remote_path = upload_to_supabase(
+            version_path,
+            storage_key(document.id, version_path.name),
+        )
 
         latest_same_hash = (
             db.query(DocumentVersion)
@@ -1057,6 +1125,8 @@ async def upload_document(
 
         if latest_same_hash:
             version_path.unlink(missing_ok=True)
+            if remote_path.startswith("supabase://"):
+                delete_from_supabase(remote_path)
 
             document.status = "ready"
             document.current_version_id = latest_same_hash.id
@@ -1096,7 +1166,7 @@ async def upload_document(
                 "status": "ready",
             }
 
-        document.file_path = str(version_path)
+        document.file_path = remote_path
         document.updated_at = datetime.utcnow()
 
         version = DocumentVersion(
@@ -1443,15 +1513,18 @@ def delete_document(
             .delete(synchronize_session=False)
         )
 
+        delete_from_supabase(document.file_path)
+
         storage_directory = STORAGE_ROOT / str(document.id)
 
         if storage_directory.exists():
             shutil.rmtree(storage_directory, ignore_errors=True)
 
-        legacy_path = Path(document.file_path)
+        if not document.file_path.startswith("supabase://"):
+            legacy_path = Path(document.file_path)
 
-        if legacy_path.exists():
-            legacy_path.unlink(missing_ok=True)
+            if legacy_path.exists():
+                legacy_path.unlink(missing_ok=True)
 
         db.delete(document)
         db.commit()
